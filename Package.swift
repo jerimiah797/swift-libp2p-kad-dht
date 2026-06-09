@@ -40,7 +40,9 @@ let package = Package(
         // claiming the `swift-libp2p` identity).
         .package(
             url: "https://github.com/jerimiah797/swift-libp2p.git",
-            revision: "c5e1533a6914fba74bae23b4735dc7890810b981"
+            // feat/dns-resolver: adds SystemDNSResolver (/dns4,/dns6,/dns) +
+            // dialableAddress DNS resolution on top of the wildcard fix.
+            revision: "e1a9aadf05528170cd98071078a87d821b89ec76"
         ),
 
         // Testing dependencies
