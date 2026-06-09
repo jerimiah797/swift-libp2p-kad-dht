@@ -386,7 +386,26 @@ public enum KadDHT {
         /// Factored out so the renewal job in `_republishProviderRecords`
         /// can call the same path without duplicating the lookup logic.
         func _announceProviderRecord(cid: [UInt8], key kid: KadDHT.Key) -> EventLoopFuture<Void> {
-            self._nearest(self.routingTable.bucketSize, peersToKey: kid).flatMap {
+            // ADD_PROVIDER MUST carry the provider's own peer record (peer id +
+            // dialable addresses). Canonical libp2p (rust-libp2p) rejects a
+            // provider message without a valid peer and then stops speaking kad
+            // to us — poisoning every other query on the connection. If we have
+            // no externally-reachable address, skip the announce entirely: an
+            // address-less provider is undialable, consumers skip it, and strict
+            // peers reject it. (The local provider store is still populated by
+            // the caller for same-process / LAN use.)
+            var externalAddrs = self.network?.advertisedAddresses(forRemote: false) ?? []
+            if externalAddrs.isEmpty {
+                externalAddrs = self.network?.advertisedAddresses(forRemote: true) ?? []
+            }
+            guard !externalAddrs.isEmpty,
+                let myProviderPeer = try? DHT.Message.Peer(
+                    PeerInfo(peer: self.peerID, addresses: externalAddrs))
+            else {
+                self.logger.notice("Skipping provider announce: no externally-reachable address")
+                return self.eventLoop.makeSucceededVoidFuture()
+            }
+            return self._nearest(self.routingTable.bucketSize, peersToKey: kid).flatMap {
                 seeds -> EventLoopFuture<Void> in
                 let lookup = KeyLookup(
                     host: self,
@@ -404,7 +423,9 @@ public enum KadDHT {
                             "Announcing provider for cid to \(closestPeers.count) nearest peers"
                         )
                         return closestPeers.prefix(self.routingTable.bucketSize).map { peer in
-                            self._sendQuery(.addProvider(cid: cid), to: peer, on: self.eventLoop)
+                            self._sendQuery(
+                                .addProvider(cid: cid, providerPeers: [myProviderPeer]),
+                                to: peer, on: self.eventLoop)
                                 .flatMapAlways { _ -> EventLoopFuture<Void> in
                                     // Best-effort: per-peer failures are
                                     // expected; the spec only requires
@@ -872,8 +893,10 @@ public enum KadDHT {
                     }
                 }
 
-            case .addProvider(let cid):
+            case .addProvider(let cid, _):
                 // Ensure the provided CID is valid...
+                // (We trust the connection peer `from` as the provider rather
+                // than the message's providerPeers — you may only add yourself.)
                 guard let CID = try? CID(cid) else {
                     return self.eventLoop.makeSucceededFuture(Response.addProvider(cid: cid, providerPeers: []))
                 }

@@ -27,8 +27,11 @@ extension KadDHT {
         case putValue(key: [UInt8], record: DHT.Record)
         /// In the request key is set to a CID.
         case getProviders(cid: [UInt8])
-        /// In the request key is set to a CID.
-        case addProvider(cid: [UInt8])
+        /// In the request key is set to a CID, and providerPeers carries the
+        /// provider's own peer record (peer id + dialable addresses). Canonical
+        /// libp2p requires the provider peer — without it a strict peer
+        /// (rust-libp2p) rejects the ADD_PROVIDER ("no valid peer").
+        case addProvider(cid: [UInt8], providerPeers: [DHT.Message.Peer])
         /// Deprecated message type replaced by the dedicated ping protocol. Implementations may still handle incoming PING requests for backwards compatibility. Implementations must not actively send PING requests.
         case ping  // Deprecated
 
@@ -69,9 +72,10 @@ extension KadDHT {
                 req.type = .getProviders
                 req.key = Data(key)
 
-            case let .addProvider(key):
+            case let .addProvider(key, providerPeers):
                 req.type = .addProvider
                 req.key = Data(key)
+                req.providerPeers = providerPeers
             }
 
             let payload = try [UInt8](req.serializedData())
@@ -123,9 +127,11 @@ extension KadDHT {
                 return Query.getProviders(cid: [UInt8](dht.key))
 
             case .addProvider:
-                /// In the request, key is set to a CID.
+                /// In the request, key is set to a CID; providerPeers carries
+                /// the sender's provider record (we read it back so the message
+                /// round-trips, though the handler trusts the connection peer).
                 guard dht.hasKey, !dht.key.isEmpty else { throw Errors.DecodingErrorInvalidType }
-                return Query.addProvider(cid: [UInt8](dht.key))
+                return Query.addProvider(cid: [UInt8](dht.key), providerPeers: dht.providerPeers)
 
             case .ping:
                 /// .ping (deprecated)
@@ -146,7 +152,7 @@ extension KadDHT {
                 return "Query::PutValue(key: \(KadDHT.keyToHumanReadableString(key)), record: \(record))"
             case .getProviders(let cid):
                 return "Query::GetProviders(cid: \(KadDHT.keyToHumanReadableString(cid)))"
-            case .addProvider(let cid):
+            case .addProvider(let cid, _):
                 return "Query::AddProviders(cid: \(KadDHT.keyToHumanReadableString(cid)))"
             case .ping:
                 return "Query::PING"
