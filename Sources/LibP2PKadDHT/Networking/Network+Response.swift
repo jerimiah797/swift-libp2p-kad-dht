@@ -123,8 +123,6 @@ extension KadDHT {
 
             case .putValue:
                 /// In the response the target node validates record, and if it is valid, it stores it in the datastore and as a response echoes the request.
-                guard dht.hasKey, !dht.key.isEmpty else { throw Errors.DecodingErrorInvalidType }
-
                 let rec: DHT.Record?
                 if dht.hasRecord {
                     rec = try DHT.Record(serializedBytes: dht.record)
@@ -132,23 +130,34 @@ extension KadDHT {
                     rec = nil
                 }
 
-                return Response.putValue(key: [UInt8](dht.key), record: rec)
+                // Don't require the echoed key — same canonical-response rule as
+                // GET_VALUE (the key, when present, is from the record).
+                let key: [UInt8] =
+                    dht.hasKey && !dht.key.isEmpty
+                    ? [UInt8](dht.key)
+                    : (rec.map { [UInt8]($0.key) } ?? [])
+
+                return Response.putValue(key: key, record: rec)
 
             case .getProviders:
                 /// In the response the target node returns the closest known providerPeers (if any) and the k closest known closerPeers.
-                guard dht.hasKey, !dht.key.isEmpty else { throw Errors.DecodingErrorInvalidType }
-
+                // Canonical GET_PROVIDERS responses don't echo the request key —
+                // only providerPeers + closerPeers; the CID is implied by the
+                // query. The old `guard dht.hasKey` rejected every rust-libp2p
+                // provider response as `DecodingErrorInvalidType`, so the lookup
+                // dropped the peer (the residual warning seen even when a
+                // GET_VALUE succeeded).
                 return Response.getProviders(
-                    cid: [UInt8](dht.key),
+                    cid: dht.hasKey ? [UInt8](dht.key) : [],
                     providerPeers: dht.providerPeers,
                     closerPeers: dht.closerPeers
                 )
 
             case .addProvider:
                 /// Do we receive a response from addProvider? Is it the list of providerPeers??
-                guard dht.hasKey, !dht.key.isEmpty else { throw Errors.DecodingErrorInvalidType }
-
-                return Response.addProvider(cid: [UInt8](dht.key), providerPeers: dht.providerPeers)
+                // Don't require the echoed key (same canonical-response rule).
+                return Response.addProvider(
+                    cid: dht.hasKey ? [UInt8](dht.key) : [], providerPeers: dht.providerPeers)
 
             case .ping:
                 /// Deprecated...
