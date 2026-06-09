@@ -100,8 +100,6 @@ extension KadDHT {
 
             case .getValue:
                 /// In the response the record is set to the value for the given key (if found in the datastore) and closerPeers is set to the k closest peers.
-                guard dht.hasKey, !dht.key.isEmpty else { throw Errors.DecodingErrorInvalidType }
-
                 let rec: DHT.Record?
                 if dht.hasRecord {
                     rec = try DHT.Record(serializedBytes: dht.record)
@@ -109,7 +107,19 @@ extension KadDHT {
                     rec = nil
                 }
 
-                return Response.getValue(key: [UInt8](dht.key), record: rec, closerPeers: dht.closerPeers)
+                // Canonical libp2p GET_VALUE *responses* do NOT echo the request
+                // key (field 2) — it's implied by the query/substream; only the
+                // record (field 3, which carries its own key) and closerPeers come
+                // back. The old `guard dht.hasKey` rejected every rust-libp2p
+                // response as `DecodingErrorInvalidType` (swift↔swift worked only
+                // because our own responder non-canonically echoed the key). Take
+                // the key from the message when present, else from the record.
+                let key: [UInt8] =
+                    dht.hasKey && !dht.key.isEmpty
+                    ? [UInt8](dht.key)
+                    : (rec.map { [UInt8]($0.key) } ?? [])
+
+                return Response.getValue(key: key, record: rec, closerPeers: dht.closerPeers)
 
             case .putValue:
                 /// In the response the target node validates record, and if it is valid, it stores it in the datastore and as a response echoes the request.
