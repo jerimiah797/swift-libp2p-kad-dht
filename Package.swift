@@ -42,7 +42,7 @@ let package = Package(
             url: "https://github.com/jerimiah797/swift-libp2p.git",
             // feat/dns-resolver: adds SystemDNSResolver (/dns4,/dns6,/dns) +
             // dialableAddress DNS resolution on top of the wildcard fix.
-            revision: "e1a9aadf05528170cd98071078a87d821b89ec76"
+            revision: "f1987c58eaa9381a25b1cc963417d4f1f91bef5b"
         ),
 
         // Testing dependencies
