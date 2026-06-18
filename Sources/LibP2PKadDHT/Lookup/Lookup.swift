@@ -493,7 +493,21 @@ final class KeyLookup: @unchecked Sendable {
                             return self._recursivelyQueryForProvider(on: on, decrementingQueries: true)
                         }
                     case .success(let response):
-                        if case let .getProviders(cid, providers, closerPeers) = response, cid == self.target.original {
+                        // Canonical GET_PROVIDERS responses (rust-libp2p) do NOT echo
+                        // the request key — a provider response carries only
+                        // providerPeers + closerPeers, so the decoder yields `cid: []`
+                        // (Network+Response.swift). The CID is implied by the query
+                        // stream. Unlike GET_VALUE — where the key is recovered from
+                        // the returned record and the guard still matches — there is no
+                        // record here to recover it from, so a strict `cid ==
+                        // self.target.original` rejected every canonical provider
+                        // response, dropped the responder, and made every lookup return
+                        // zero providers. Accept an omitted (empty) cid as matching the
+                        // query, mirroring the same canonical-response rule already
+                        // applied on the decode side.
+                        if case let .getProviders(cid, providers, closerPeers) = response,
+                            cid.isEmpty || cid == self.target.original
+                        {
                             /// If we found a provider, store it...
                             if !providers.isEmpty {
                                 let providerPeers = providers.compactMap { try? $0.toPeerInfo() }.filter { pInfo in
