@@ -423,7 +423,10 @@ public enum KadDHT {
                             "Announcing provider for cid to \(closestPeers.count) nearest peers"
                         )
                         return closestPeers.prefix(self.routingTable.bucketSize).map { peer in
-                            self._sendQuery(
+                            // One-way: ADD_PROVIDER has no response on the wire
+                            // (rust-libp2p stores and closes silently), so this
+                            // resolves on write instead of timing out waiting.
+                            self._sendOneWayMessage(
                                 .addProvider(cid: cid, providerPeers: [myProviderPeer]),
                                 to: peer, on: self.eventLoop)
                                 .flatMapAlways { _ -> EventLoopFuture<Void> in
@@ -931,6 +934,51 @@ public enum KadDHT {
                             return Response.addProvider(cid: cid, providerPeers: [provider])
                         }
                     }
+                }
+            }
+        }
+
+        /// Sends `query` and resolves once the bytes are written (stream
+        /// negotiated → payload flushed → stream closed) — the fire-and-forget
+        /// path for kad messages that have NO response on the wire as the
+        /// protocol is practiced. `ADD_PROVIDER` is the case: rust-libp2p (the
+        /// canonical peer) stores the provider record and closes without
+        /// replying, so routing it through ``_sendQuery(_:to:on:)`` made every
+        /// announce wait out the full `connectionTimeout` for a reply that
+        /// never comes — 5s per provide, stacking on any caller that awaits.
+        func _sendOneWayMessage(
+            _ query: Query,
+            to: PeerInfo,
+            on: EventLoop? = nil
+        ) -> EventLoopFuture<Void> {
+            guard let network = self.network else {
+                return (on ?? self.eventLoop).makeFailedFuture(Errors.noNetwork)
+            }
+            guard let payload = try? query.encode() else {
+                return (on ?? self.eventLoop).makeFailedFuture(Errors.encodingError)
+            }
+            return network.dialableAddress(
+                to.addresses,
+                externalAddressesOnly: !self.isRunningLocally,
+                on: on ?? self.eventLoop
+            ).flatMap { dialableAddresses -> EventLoopFuture<Void> in
+                guard let addy = dialableAddresses.first else {
+                    return (on ?? self.eventLoop).makeFailedFuture(Errors.noDialableAddressesForPeer)
+                }
+                do {
+                    /// Encapsulate the peer's expected key so the dial verifies the responder.
+                    let ma =
+                        addy.getPeerIDString() != nil
+                        ? addy : try addy.encapsulate(proto: .p2p, address: to.peer.b58String)
+                    return network.newRequest(
+                        to: ma,
+                        forProtocol: KadDHT.multicodec,
+                        withRequest: Data(payload),
+                        style: .noResponseExpected,
+                        withTimeout: self.connectionTimeout
+                    ).map { _ in () }
+                } catch {
+                    return (on ?? self.eventLoop).makeFailedFuture(Errors.peerIDMultiaddrEncapsulationFailed)
                 }
             }
         }
